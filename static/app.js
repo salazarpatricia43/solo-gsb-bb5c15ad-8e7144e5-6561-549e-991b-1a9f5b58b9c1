@@ -1027,6 +1027,8 @@ function bindToolbar() {
   $("#btnRoute").onclick = openRoute;
   $("#routeRun").onclick = runRoutePlan;
   $("#btnShare").onclick = openShare;
+  $("#inviteGen").onclick = generateInvites;
+  $("#inviteRefresh").onclick = loadInvites;
   $("#btnExport").onclick = exportJson;
   $("#btnImport").onclick = () => $("#importFile").click();
   $("#importFile").onchange = importJson;
@@ -1317,17 +1319,75 @@ async function confirmPort() {
 
 // ---------------------------------------------------------------- share / preview
 
+const shareState = { token: null, url: "" };
+
 async function openShare() {
   if (!state.currentId) return;
   if (state.dirty) await saveScript();
   const r = await api(`/api/scripts/${state.currentId}/share`, { method: "POST" });
-  const url = location.origin + r.url;
-  $("#shareLink").value = url;
-  $("#shareOpen").onclick = () => window.open(url, "_blank");
+  shareState.token = r.token;
+  shareState.url = location.origin + r.url;
+  $("#shareLink").value = shareState.url;
+  $("#shareOpen").onclick = () => window.open(shareState.url, "_blank");
   $("#shareCopy").onclick = () => {
-    copyText(url).then((ok) => toast(ok ? "链接已复制" : "复制失败，请手动选择复制"));
+    copyText(shareState.url).then((ok) => toast(ok ? "链接已复制" : "复制失败，请手动选择复制"));
   };
   openModal("shareModal");
+  loadInvites();
+}
+
+async function loadInvites() {
+  if (!shareState.token) return;
+  const statusEl = $("#inviteStatus"), codesEl = $("#inviteCodes");
+  try {
+    const r = await api(`/api/share/${encodeURIComponent(shareState.token)}/invites`);
+    renderInvites(r, statusEl, codesEl);
+  } catch (err) {
+    statusEl.innerHTML = `<span class="invite-err">邀请码状态加载失败：${esc(err.message)}</span>`;
+    codesEl.innerHTML = "";
+  }
+}
+
+function renderInvites(r, statusEl, codesEl) {
+  $("#inviteGen").textContent = r.invite_only ? "再生成一批" : "开启邀请制并生成";
+  if (!r.invite_only) {
+    statusEl.innerHTML = `<span class="invite-off">当前为<b>公开分享</b>，受访者打开链接即可直接开始；尚未生成邀请码。</span>`;
+    codesEl.innerHTML = "";
+    return;
+  }
+  statusEl.innerHTML =
+    `<span class="invite-on">🎫 邀请制已开启</span>
+     <span class="invite-counts">共 <b>${r.total}</b> 个 ·
+       <b class="invite-used">已用 ${r.used_count}</b> ·
+       <b class="invite-unused">未用 ${r.unused_count}</b></span>`;
+  if (!r.codes.length) { codesEl.innerHTML = ""; return; }
+  codesEl.innerHTML = r.codes.map((c) => `
+    <div class="invite-code ${c.used ? "used" : ""}" title="${c.used ? "已使用" + (c.used_at ? " · " + c.used_at.replace("T", " ").slice(0, 16) : "") : "未使用，点击可复制"}">
+      <code>${esc(c.code)}</code>
+      <span class="invite-state">${c.used ? "已用" : "未用"}</span>
+    </div>`).join("");
+  codesEl.querySelectorAll(".invite-code:not(.used)").forEach((el) => {
+    el.onclick = () => copyText(el.querySelector("code").textContent)
+      .then((ok) => toast(ok ? "邀请码已复制" : "复制失败，请手动选择复制"));
+  });
+}
+
+async function generateInvites() {
+  if (!shareState.token) return;
+  const count = Math.max(1, Math.min(500, Number($("#inviteCount").value) || 0));
+  if (count < 1) { toast("请输入 1～500 的数量"); return; }
+  $("#inviteCount").value = count;
+  const btn = $("#inviteGen");
+  btn.disabled = true;
+  try {
+    const r = await api(`/api/share/${encodeURIComponent(shareState.token)}/invites`,
+      { method: "POST", body: { count } });
+    renderInvites(r, $("#inviteStatus"), $("#inviteCodes"));
+    toast(`已生成 ${r.created.length} 个邀请码（未用 ${r.unused_count} / 共 ${r.total}）`);
+  } catch (err) {
+    toast("生成失败：" + err.message, 3500);
+  }
+  btn.disabled = false;
 }
 
 let runId = null;

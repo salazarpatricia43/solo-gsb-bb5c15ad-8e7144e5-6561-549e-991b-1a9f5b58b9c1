@@ -437,3 +437,47 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   background: #fff; border: 1px solid #fecaca; color: #991b1b;
   border-radius: 10px; padding: 24px 20px; font-size: 14px;
 }
+
+/* ---------- share snapshot invite codes ---------- */
+.invite-chip {
+  font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 999px;
+  background: #fef3c7; border: 1px solid #fcd34d; color: #92400e;
+}
+.invite-box {
+  margin-top: 18px; border-top: 1px dashed var(--border); padding-top: 14px;
+}
+.invite-box h4 { margin: 0 0 8px; font-size: 14px; }
+.invite-gen-row { display: flex; align-items: center; gap: 8px; font-size: 13px;
+  color: var(--muted); flex-wrap: wrap; }
+.invite-gen-row label { display: flex; align-items: center; gap: 6px; }
+.invite-gen-row input[type=number] {
+  width: 76px; font: inherit; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: 6px; background: #f9fafb;
+}
+.invite-status { margin-top: 12px; font-size: 13px; line-height: 1.8; }
+.invite-on {
+  font-weight: 700; color: #92400e; background: #fef3c7; border: 1px solid #fcd34d;
+  border-radius: 999px; padding: 2px 10px; margin-right: 8px;
+}
+.invite-off { color: var(--muted); }
+.invite-used { color: #6b7280; }
+.invite-unused { color: #15803d; }
+.invite-err { color: #991b1b; }
+.invite-codes {
+  margin-top: 10px; max-height: 220px; overflow-y: auto;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+}
+.invite-code {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px;
+  background: #f0fdf4; cursor: pointer; font-size: 13px;
+}
+.invite-code:hover { border-color: var(--primary); }
+.invite-code code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 1px; color: #166534;
+}
+.invite-code.used { background: #f9fafb; cursor: default; }
+.invite-code.used code { color: #9ca3af; text-decoration: line-through; }
+.invite-state { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.invite-code:not(.used) .invite-state { color: #15803d; }

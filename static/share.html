@@ -9,6 +9,7 @@
 <body style="background:#f4f5f7">
 <div class="readonly-banner">
   🔒 只读分享 · 访谈脚本：<b id="shareName" style="margin:0 6px"></b>
+  <span id="inviteBadge" class="invite-chip" style="display:none">🎫 邀请制</span>
   <span style="margin-left:auto">此页面为只读快照，无法编辑脚本</span>
 </div>
 <div style="max-width:860px;margin:24px auto;padding:0 16px">
@@ -17,8 +18,17 @@
   <div id="gate" style="display:none">
     <div class="q-card">
       <div class="q-title">欢迎参加访谈</div>
-      <div class="q-text">本页面为只读分享快照。点击下方按钮即从第一个问题开始一份新的作答，你的回答路径会保存在服务端。</div>
-      <button class="primary" id="startNew">▶ 开始新的作答</button>
+      <div class="q-text" id="gateIntro">本页面为只读分享快照。点击下方按钮即从第一个问题开始一份新的作答，你的回答路径会保存在服务端。</div>
+      <div id="inviteGate" style="display:none;margin-bottom:14px">
+        <label class="resume-label" style="margin:0 0 6px">🎫 邀请码（本快照开启了邀请制，开始新的作答必须输入）</label>
+        <div class="resume-row">
+          <input id="inviteInput" type="text" placeholder="输入邀请码" autocomplete="off"
+                 spellcheck="false" style="text-transform:uppercase;letter-spacing:2px">
+          <button class="primary" id="startNew">▶ 开始新的作答</button>
+        </div>
+        <div id="inviteError" class="resume-error" style="display:none"></div>
+      </div>
+      <button class="primary" id="startNewPublic">▶ 开始新的作答</button>
     </div>
     <div class="resume-box">
       <h4>⏸ 暂停续答</h4>
@@ -90,8 +100,10 @@
 <script src="/static/common.js"></script>
 <script>
   let runId = null;
+  let inviteOnly = false;
   const shareToken = new URLSearchParams(location.search).get("token");
   const prefilledResume = (new URLSearchParams(location.search).get("resume") || "").trim();
+  const prefilledInvite = (new URLSearchParams(location.search).get("invite") || "").trim();
 
   const $ = (id) => document.getElementById(id);
 
@@ -102,6 +114,24 @@
     const el = $("resumeError");
     el.textContent = msg;
     el.style.display = msg ? "" : "none";
+  }
+
+  function showInviteError(msg) {
+    const el = $("inviteError");
+    el.textContent = msg;
+    el.style.display = msg ? "" : "none";
+  }
+
+  // Render the gate according to whether the snapshot requires an invite code:
+  // invite-only snapshots ask for the code before a new session can start;
+  // public snapshots keep the one-click start button. Resuming a paused
+  // session never asks for an invite code (it restores an existing session).
+  function renderGate() {
+    $("inviteGate").style.display = inviteOnly ? "" : "none";
+    $("startNewPublic").style.display = inviteOnly ? "none" : "";
+    $("gateIntro").textContent = inviteOnly
+      ? "本页面为只读分享快照，且已开启邀请制。输入邀请码后点击「开始新的作答」，邀请码仅可使用一次，且仅对当前分享快照有效。"
+      : "本页面为只读分享快照。点击下方按钮即从第一个问题开始一份新的作答，你的回答路径会保存在服务端。";
   }
 
   function renderRun(r, resumedInfo) {
@@ -160,16 +190,31 @@
   }
 
   async function startNew() {
-    const btn = $("startNew");
+    let inviteCode = "";
+    if (inviteOnly) {
+      inviteCode = $("inviteInput").value.trim();
+      showInviteError("");
+      if (!inviteCode) {
+        showInviteError("请先输入邀请码");
+        $("inviteInput").focus();
+        return;
+      }
+    }
+    const btn = inviteOnly ? $("startNew") : $("startNewPublic");
     btn.disabled = true;
     try {
-      const r = await api("/api/runs", { method: "POST", body: { share_token: shareToken } });
+      const r = await api("/api/runs", {
+        method: "POST",
+        body: { share_token: shareToken, invite_code: inviteCode || undefined },
+      });
       runId = r.run_id;
       $("resumeBanner").style.display = "none";
       showSession();
       renderRun(r);
     } catch (err) {
-      toast(err.message);
+      // 403 = bad / used / cross-snapshot invite code; keep the gate open.
+      if (inviteOnly) showInviteError("无法开始：" + err.message);
+      else toast(err.message);
     } finally {
       btn.disabled = false;
     }
@@ -226,6 +271,8 @@
   }
 
   $("startNew").onclick = startNew;
+  $("startNewPublic").onclick = startNew;
+  $("inviteInput").addEventListener("keydown", (e) => { if (e.key === "Enter") startNew(); });
   $("resumeBtn").onclick = doResume;
   $("resumeInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doResume(); });
   $("btnPause").onclick = doPause;
@@ -264,7 +311,15 @@
       const share = await api(`/api/share/${encodeURIComponent(shareToken)}`);
       document.title = `${share.name} · 只读访谈`;
       $("shareName").textContent = share.name;
+      inviteOnly = !!share.invite_only;
+      $("inviteBadge").style.display = inviteOnly ? "" : "none";
+      renderGate();
       showGate();
+      if (inviteOnly && prefilledInvite) {
+        $("inviteInput").value = prefilledInvite;
+        $("inviteInput").focus();
+        $("inviteInput").select();
+      }
       if (prefilledResume) {
         $("resumeInput").value = prefilledResume;
         $("resumeInput").focus();

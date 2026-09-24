@@ -184,6 +184,24 @@
         <button id="shareCopy">复制</button>
       </div>
       <div style="margin-top:12px"><button class="primary" id="shareOpen">在新标签页打开</button></div>
+
+      <div class="invite-box">
+        <h4>🎫 邀请码（邀请制）</h4>
+        <p style="margin:0 0 10px;font-size:13px;color:var(--muted);line-height:1.7">
+          为<b>当前这个分享快照</b>开启邀请制后，受访者必须在分享页输入邀请码才能开始新的作答；
+          邀请码只属于该快照、一码仅可使用一次（核验、消耗与新建会话在同一数据库写事务中完成，
+          重复 / 跨快照 / 并发使用均被拒绝且不会新增会话）。公开链接、编辑器预览与凭续答令牌恢复均不受影响。</p>
+        <div class="invite-gen-row">
+          <label>批量生成
+            <input id="inviteCount" type="number" min="1" max="500" value="10">
+          </label>
+          <span>个随机邀请码</span>
+          <button class="primary" id="inviteGen">开启邀请制并生成</button>
+          <button id="inviteRefresh">↻ 刷新</button>
+        </div>
+        <div id="inviteStatus" class="invite-status"></div>
+        <div id="inviteCodes" class="invite-codes"></div>
+      </div>
     </div>
     <footer><button data-close="shareModal">关闭</button></footer>
   </div>
