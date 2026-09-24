@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.editor.db
+editor.db
+.git/
+.venv/

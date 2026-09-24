@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>分支访谈脚本编辑器</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div class="app">
+  <!-- sidebar -->
+  <aside class="sidebar">
+    <h1>分支访谈编辑器<small>Branch Interview Editor</small></h1>
+    <div class="btns">
+      <button class="primary" id="btnNew">＋ 新建脚本</button>
+      <button id="btnSample">载入示例脚本</button>
+    </div>
+    <div class="list" id="scriptList"></div>
+  </aside>
+
+  <!-- main -->
+  <div class="main">
+    <div class="toolbar">
+      <input class="title-input" id="scriptName" value="" placeholder="脚本名称">
+      <button id="btnAddNode">＋ 添加问题节点</button>
+      <button id="btnPort" title="从其他已保存脚本复制入口可达的分支到当前画布">🔀 跨脚本移植</button>
+      <button id="btnUndo" title="撤销 (Ctrl/Cmd+Z)" disabled>↶ 撤销</button>
+      <button id="btnRedo" title="重做 (Shift+Ctrl/Cmd+Z)" disabled>↷ 重做</button>
+      <button class="primary" id="btnSave">保存 (Ctrl+S)</button>
+      <div class="spacer"></div>
+      <button id="btnPreview">▶ 运行预览</button>
+      <button id="btnCoverage" title="按已保存运行记录统计各选项被选择次数">📊 分支覆盖</button>
+      <button id="btnImpact" title="以当前画布（含未保存修改）重放核对全部预览与分享作答，找出受改稿影响的会话">🩺 改稿影响分析</button>
+      <button id="btnRoute" title="勾选 1～6 个已连接选项，规划经过它们到达终点的最短选择序列">🧭 路线规划</button>
+      <button id="btnShare">🔗 只读分享</button>
+      <button id="btnExport">导出 JSON</button>
+      <button id="btnImport">导入 JSON</button>
+      <input type="file" id="importFile" accept="application/json,.json" hidden>
+    </div>
+    <div class="toolbar" style="padding-top:6px;padding-bottom:6px;">
+      <div class="status" id="status"></div>
+    </div>
+
+    <div class="canvas-wrap" id="canvasWrap">
+      <div id="world">
+        <svg id="edges" width="4000" height="3000">
+          <path id="tempEdge" class="edge dangle" style="display:none;pointer-events:none"></path>
+        </svg>
+      </div>
+      <div class="connecting-tip" id="connectingTip">松开鼠标连接到目标节点（ESC 取消）</div>
+      <div class="canvas-hint">
+        拖动节点标题移动 · 拖拽选项右侧圆点连线 · 点击连线修改/删除<br>
+        Ctrl/Cmd+Z 撤销 · Shift+Ctrl/Cmd+Z 重做 · 空白处拖动平移画布 ·
+        <b style="color:var(--cycle)">红=环路</b> /
+        <b style="color:var(--orphan)">橙虚线=孤立</b> /
+        <b style="color:var(--uncovered)">紫=未覆盖出口</b> ·
+        <b style="color:var(--coverage)">📊 分支覆盖=选项被选择次数</b>
+      </div>
+    </div>
+  </div>
+
+  <!-- inspector -->
+  <aside class="inspector" id="inspector"></aside>
+</div>
+
+<!-- preview modal -->
+<div class="modal-mask" id="previewModal">
+  <div class="modal wide">
+    <header>运行预览<span class="close" data-close="previewModal">✕</span></header>
+    <div class="body">
+      <div class="preview-grid">
+        <div id="previewCard"></div>
+        <div>
+          <div class="path-list">
+            <h4>回答路径记录</h4>
+            <div id="runPath"></div>
+          </div>
+          <div style="margin-top:10px"><button id="runRestart">↺ 重新开始</button></div>
+        </div>
+      </div>
+    </div>
+    <footer>
+      <button data-close="previewModal">关闭</button>
+    </footer>
+  </div>
+</div>
+
+<!-- coverage modal -->
+<div class="modal-mask" id="coverageModal">
+  <div class="modal wide">
+    <header>分支覆盖统计<span class="close" data-close="coverageModal">✕</span></header>
+    <div class="body">
+      <div id="coverageSummary"></div>
+      <div id="coverageList"></div>
+    </div>
+    <footer>
+      <button id="coverageRefresh">↻ 刷新统计</button>
+      <button data-close="coverageModal">关闭</button>
+    </footer>
+  </div>
+</div>
+
+<!-- revision impact modal -->
+<div class="modal-mask" id="impactModal">
+  <div class="modal wide">
+    <header>改稿影响分析<span class="close" data-close="impactModal">✕</span></header>
+    <div class="body">
+      <p class="route-tip">
+        以<b>当前画布（含未保存修改）</b>为基准，对本脚本的<b>运行预览</b>与<b>只读分享作答</b>记录逐条重放：
+        服务端从当前起点按历史选项顺序核对每一步跳转目标，发现
+        <b>起点改变 / 节点或选项消失 / 跳转改指 / 提前终止 / 已结束答卷不再结束</b>时，
+        返回<b>首个断点</b>及原因；未完成答卷只核对已答部分，完全匹配标为<b>兼容</b>。<br>
+        分析为<b>只读计算</b>：不保存脚本、不改写作答记录、不改变分支覆盖统计。
+      </p>
+      <div id="impactSummary"></div>
+      <div id="impactList"></div>
+    </div>
+    <footer>
+      <button id="impactRefresh">↻ 重新分析当前画布</button>
+      <button data-close="impactModal">关闭</button>
+    </footer>
+  </div>
+</div>
+
+<!-- route plan modal -->
+<div class="modal-mask" id="routeModal">
+  <div class="modal wide">
+    <header>指定选项路线规划<span class="close" data-close="routeModal">✕</span></header>
+    <div class="body">
+      <p class="route-tip">
+        勾选 <b>1～6</b> 个已连接目标的选项，求从<b>起始节点</b>出发、经过每个勾选选项至少一次、
+        最终到达<b>终止节点（含无选项节点）</b>的最短选择序列（以选择次数计）。
+        搜索允许环路和重复访问节点，但标记为终止的节点不可继续选择；无可行路线时明确显示无解，不返回部分路径。<br>
+        规划基于<b>当前画布</b>（含未保存修改）只读计算：不会保存脚本，也不生成运行记录或改变分支覆盖统计。
+      </p>
+      <div class="route-pick" id="routePick"></div>
+      <div class="route-actions">
+        <span class="route-count" id="routePickCount">已选 0/6</span>
+        <button class="primary" id="routeRun" disabled>🧭 开始规划</button>
+      </div>
+      <div id="routeResult"></div>
+    </div>
+    <footer>
+      <button data-close="routeModal">关闭</button>
+    </footer>
+  </div>
+</div>
+
+<!-- cross-script port modal -->
+<div class="modal-mask" id="portModal">
+  <div class="modal">
+    <header>跨脚本移植分支<span class="close" data-close="portModal">✕</span></header>
+    <div class="body">
+      <p style="margin:0 0 12px;color:var(--muted);font-size:13px">
+        从<b>当前脚本以外</b>的已保存脚本选择入口节点，入口可达的全部节点与内部选项连接会被一次性复制到当前画布；
+        节点和选项会重新生成 ID，内部跳转引用统一重写，环路或多路径汇合也只复制一次，原本无效或未连接的目标保持未连接。
+        新分支按原相对坐标放在当前视野附近，不会覆盖当前起始节点，整次移植计为一次撤销。</p>
+      <div class="field">
+        <label for="portScript">来源脚本</label>
+        <select id="portScript"></select>
+      </div>
+      <div class="field">
+        <label for="portEntry">入口节点（从该节点出发复制可达分支）</label>
+        <select id="portEntry"></select>
+      </div>
+      <div class="port-summary" id="portSummary"></div>
+    </div>
+    <footer>
+      <button data-close="portModal">取消</button>
+      <button class="primary" id="portConfirm">移植到当前画布</button>
+    </footer>
+  </div>
+</div>
+
+<!-- share modal -->
+<div class="modal-mask" id="shareModal">
+  <div class="modal">
+    <header>只读分享链接<span class="close" data-close="shareModal">✕</span></header>
+    <div class="body">
+      <p style="margin:0 0 12px;color:var(--muted);font-size:13px">
+        链接打开的是生成分享时脚本的只读快照（受访者视角），后续编辑不影响已分享内容。</p>
+      <div class="share-link-row">
+        <input id="shareLink" readonly>
+        <button id="shareCopy">复制</button>
+      </div>
+      <div style="margin-top:12px"><button class="primary" id="shareOpen">在新标签页打开</button></div>
+    </div>
+    <footer><button data-close="shareModal">关闭</button></footer>
+  </div>
+</div>
+
+<script src="/static/common.js"></script>
+<script src="/static/app.js"></script>
+<script>
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-close]");
+    if (b) closeModal(b.dataset.close);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      document.querySelectorAll(".modal-mask.open").forEach((m) => m.classList.remove("open"));
+    }
+  });
+</script>
+</body>
+</html>

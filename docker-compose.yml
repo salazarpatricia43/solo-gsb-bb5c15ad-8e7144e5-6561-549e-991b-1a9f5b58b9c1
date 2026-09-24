@@ -1,0 +1,15 @@
+services:
+  interview-editor:
+    build: .
+    container_name: interview-editor
+    ports:
+      - "8000:8000"
+    volumes:
+      - editor-data:/data
+    environment:
+      # SQLite 数据库文件位置（容器内），已挂载到命名卷持久化
+      DB_PATH: /data/editor.db
+    restart: unless-stopped
+
+volumes:
+  editor-data:

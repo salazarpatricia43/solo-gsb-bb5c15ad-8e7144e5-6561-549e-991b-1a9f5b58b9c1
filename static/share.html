@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>访谈预览（只读分享）</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body style="background:#f4f5f7">
+<div class="readonly-banner">
+  🔒 只读分享 · 访谈脚本：<b id="shareName" style="margin:0 6px"></b>
+  <span style="margin-left:auto">此页面为只读快照，无法编辑脚本</span>
+</div>
+<div style="max-width:860px;margin:24px auto;padding:0 16px">
+
+  <!-- entry gate: start a new answer or resume a paused one -->
+  <div id="gate" style="display:none">
+    <div class="q-card">
+      <div class="q-title">欢迎参加访谈</div>
+      <div class="q-text">本页面为只读分享快照。点击下方按钮即从第一个问题开始一份新的作答，你的回答路径会保存在服务端。</div>
+      <button class="primary" id="startNew">▶ 开始新的作答</button>
+    </div>
+    <div class="resume-box">
+      <h4>⏸ 暂停续答</h4>
+      <p style="margin:0 0 10px;font-size:13px;color:var(--muted);line-height:1.7">
+        之前生成过<b>续答令牌</b>？粘贴令牌后点击「恢复会话」，将直接回到暂停时的题目，
+        已回答的路径原样恢复，<b>不会</b>新建会话。续答令牌仅对本分享快照有效且只能使用一次。</p>
+      <div class="resume-row">
+        <input id="resumeInput" type="text" placeholder="粘贴续答令牌" autocomplete="off" spellcheck="false">
+        <button class="primary" id="resumeBtn">恢复会话</button>
+      </div>
+      <div id="resumeError" class="resume-error" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- active answer session -->
+  <div id="session" style="display:none">
+    <div id="resumeBanner" class="resume-banner" style="display:none"></div>
+    <div class="preview-grid" style="grid-template-columns:1fr 240px">
+      <div>
+        <div id="previewCard" style="font-size:15px"></div>
+        <div class="run-actions">
+          <button id="runRestart">↺ 重新开始</button>
+          <button id="btnPause" title="在当前题目生成一次性续答令牌，之后可凭令牌恢复本次作答">
+            ⏸ 暂停并生成续答令牌
+          </button>
+        </div>
+      </div>
+      <div>
+        <div class="path-list">
+          <h4>回答路径记录</h4>
+          <div id="runPath"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="fatal" class="fatal-box" style="display:none"></div>
+</div>
+
+<!-- pause token modal -->
+<div class="modal-mask" id="pauseModal">
+  <div class="modal">
+    <header>⏸ 暂停续答令牌<span class="close" data-close="pauseModal">✕</span></header>
+    <div class="body">
+      <p class="route-tip" style="margin:0 0 14px">
+        当前作答进度（<b id="pauseProgress"></b>）已可凭下方令牌恢复。请<b>复制并妥善保存</b>：
+        令牌<b>只显示这一次</b>、<b>只能使用一次</b>，且仅对当前分享快照有效。<br>
+        生成令牌不会中断作答——你可以直接关闭页面，也可以点「继续作答」答完剩余题目；
+        若继续作答后再使用令牌，将恢复到<b>使用令牌那一刻</b>的最新进度。
+      </p>
+      <label class="resume-label">一次性续答令牌</label>
+      <div class="share-link-row">
+        <input id="pauseToken" readonly>
+        <button id="pauseCopyToken">复制令牌</button>
+      </div>
+      <label class="resume-label">含令牌的续答链接（推荐，重新打开即自动填好令牌）</label>
+      <div class="share-link-row">
+        <input id="pauseLink" readonly>
+        <button id="pauseCopyLink">复制链接</button>
+      </div>
+    </div>
+    <footer>
+      <button data-close="pauseModal">我已保存</button>
+      <button class="primary" id="pauseContinue">继续作答</button>
+    </footer>
+  </div>
+</div>
+
+<script src="/static/common.js"></script>
+<script>
+  let runId = null;
+  const shareToken = new URLSearchParams(location.search).get("token");
+  const prefilledResume = (new URLSearchParams(location.search).get("resume") || "").trim();
+
+  const $ = (id) => document.getElementById(id);
+
+  function showGate() { $("gate").style.display = ""; $("session").style.display = "none"; }
+  function showSession() { $("gate").style.display = "none"; $("session").style.display = ""; }
+
+  function showResumeError(msg) {
+    const el = $("resumeError");
+    el.textContent = msg;
+    el.style.display = msg ? "" : "none";
+  }
+
+  function renderRun(r, resumedInfo) {
+    const node = r.current_node;
+    const finished = r.finished || node.terminal || !(node.options || []).length;
+    const card = $("previewCard");
+    if (finished) {
+      card.innerHTML = `
+        <div class="q-card">
+          <div class="q-title">${esc(node.title)}</div>
+          <div class="q-text">${esc(node.text)}</div>
+          <div class="end">— 访谈结束 —</div>
+        </div>`;
+    } else {
+      card.innerHTML = `
+        <div class="q-card">
+          <div class="q-title">${esc(node.title)}</div>
+          <div class="q-text">${esc(node.text)}</div>
+          <div class="choices">
+            ${node.options.map((o) =>
+              `<button data-oid="${o.id}" ${o.target_id ? "" : "disabled"}>
+                 ${esc(o.label)}${o.target_id ? "" : "（未连接）"}
+               </button>`).join("")}
+          </div>
+        </div>`;
+      card.querySelectorAll("button[data-oid]").forEach((b) => {
+        b.onclick = async () => {
+          b.disabled = true;
+          try {
+            const nr = await api(`/api/runs/${runId}/choice`, {
+              method: "POST", body: { option_id: b.dataset.oid } });
+            renderRun(nr);
+          } catch (err) {
+            toast(err.message);
+            b.disabled = false;
+          }
+        };
+      });
+    }
+    // Nothing to resume once the interview has ended.
+    $("btnPause").style.display = finished ? "none" : "";
+    $("runPath").innerHTML = r.steps.map((s, i) => `
+      <div class="path-step">
+        ${i + 1}. ${esc(s.title || s.node_id)}
+        ${s.answer ? `<div class="ans">↳ 回答：${esc(s.answer)}</div>` : ""}
+      </div>`).join("");
+
+    const banner = $("resumeBanner");
+    if (resumedInfo) {
+      banner.style.display = "";
+      banner.innerHTML = `✅ 已恢复暂停的会话 <b>#${esc(String(r.run_id))}</b> ·
+        已回答 <b>${resumedInfo.answered}</b> 步，当前题目与完整回答路径均已恢复，可直接继续作答。
+        <button id="bannerDismiss" class="banner-dismiss">知道了</button>`;
+      $("bannerDismiss").onclick = () => { banner.style.display = "none"; };
+    }
+  }
+
+  async function startNew() {
+    const btn = $("startNew");
+    btn.disabled = true;
+    try {
+      const r = await api("/api/runs", { method: "POST", body: { share_token: shareToken } });
+      runId = r.run_id;
+      $("resumeBanner").style.display = "none";
+      showSession();
+      renderRun(r);
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function doResume() {
+    const resumeToken = $("resumeInput").value.trim();
+    showResumeError("");
+    if (!resumeToken) {
+      showResumeError("请先粘贴续答令牌");
+      $("resumeInput").focus();
+      return;
+    }
+    const btn = $("resumeBtn");
+    btn.disabled = true;
+    try {
+      const r = await api(`/api/share/${encodeURIComponent(shareToken)}/resume`,
+        { method: "POST", body: { resume_token: resumeToken } });
+      runId = r.run_id;
+      showSession();
+      const answered = r.steps.filter((s) => s.option_id).length;
+      renderRun(r, { answered });
+      // Token is consumed; drop it from the URL so a refresh does not reuse it.
+      const url = new URL(location.href);
+      url.searchParams.delete("resume");
+      history.replaceState(null, "", url);
+      toast("已恢复暂停的作答");
+    } catch (err) {
+      // Explicit server messages: used / wrong snapshot / ended / not found.
+      showResumeError("无法恢复：" + err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function doPause() {
+    if (!runId) return;
+    const btn = $("btnPause");
+    btn.disabled = true;
+    try {
+      const r = await api(`/api/runs/${runId}/pause`, { method: "POST" });
+      const link = `${location.origin}/share.html?token=${encodeURIComponent(shareToken)}&resume=${encodeURIComponent(r.resume_token)}`;
+      $("pauseProgress").textContent = `已回答 ${r.answered} 步 · 会话 #${runId}`;
+      $("pauseToken").value = r.resume_token;
+      $("pauseLink").value = link;
+      openModal("pauseModal");
+      $("pauseToken").focus();
+      $("pauseToken").select();
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  $("startNew").onclick = startNew;
+  $("resumeBtn").onclick = doResume;
+  $("resumeInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doResume(); });
+  $("btnPause").onclick = doPause;
+  $("pauseCopyToken").onclick = () =>
+    copyText($("pauseToken").value).then((ok) => toast(ok ? "续答令牌已复制" : "复制失败，请手动选择复制"));
+  $("pauseCopyLink").onclick = () =>
+    copyText($("pauseLink").value).then((ok) => toast(ok ? "续答链接已复制" : "复制失败，请手动选择复制"));
+  $("pauseContinue").onclick = () => closeModal("pauseModal");
+  $("runRestart").onclick = async () => {
+    if (!runId) return;
+    try {
+      $("resumeBanner").style.display = "none";
+      renderRun(await api(`/api/runs/${runId}/restart`, { method: "POST" }));
+    } catch (err) {
+      toast(err.message);
+    }
+  };
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-close]");
+    if (b) closeModal(b.dataset.close);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      document.querySelectorAll(".modal-mask.open").forEach((m) => m.classList.remove("open"));
+    }
+  });
+
+  (async () => {
+    if (!shareToken) {
+      const f = $("fatal");
+      f.style.display = "block";
+      f.textContent = "链接缺少分享令牌（?token=...），请向分享者索取完整链接。";
+      return;
+    }
+    try {
+      const share = await api(`/api/share/${encodeURIComponent(shareToken)}`);
+      document.title = `${share.name} · 只读访谈`;
+      $("shareName").textContent = share.name;
+      showGate();
+      if (prefilledResume) {
+        $("resumeInput").value = prefilledResume;
+        $("resumeInput").focus();
+        $("resumeInput").select();
+      }
+    } catch (err) {
+      const f = $("fatal");
+      f.style.display = "block";
+      f.textContent = "无法打开分享：" + err.message;
+    }
+  })();
+</script>
+</body>
+</html>
