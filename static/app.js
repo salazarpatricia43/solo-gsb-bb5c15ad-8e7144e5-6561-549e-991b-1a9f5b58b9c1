@@ -1027,6 +1027,9 @@ function bindToolbar() {
   $("#btnRoute").onclick = openRoute;
   $("#routeRun").onclick = runRoutePlan;
   $("#btnShare").onclick = openShare;
+  $("#inviteToggle").onclick = toggleInvite;
+  $("#inviteGen").onclick = generateInvites;
+  $("#inviteRefresh").onclick = () => loadInvites(false);
   $("#btnExport").onclick = exportJson;
   $("#btnImport").onclick = () => $("#importFile").click();
   $("#importFile").onchange = importJson;
@@ -1316,6 +1319,15 @@ async function confirmPort() {
 }
 
 // ---------------------------------------------------------------- share / preview
+// Invite-only sharing: the editor can switch the freshly created snapshot to
+// invite-only, batch-generate one-time invite codes and watch used/unused
+// counts. Codes belong to that one snapshot; respondents must enter a code on
+// the share page to start a new session (the server verifies, consumes and
+// creates the session in a single SQLite write transaction).
+
+const shareState = { token: null, invites: null };
+
+const fmtCode = (c) => (c && c.length === 8 ? `${c.slice(0, 4)}-${c.slice(4)}` : c);
 
 async function openShare() {
   if (!state.currentId) return;
@@ -1327,7 +1339,92 @@ async function openShare() {
   $("#shareCopy").onclick = () => {
     copyText(url).then((ok) => toast(ok ? "链接已复制" : "复制失败，请手动选择复制"));
   };
+  shareState.token = r.token;
+  shareState.invites = null;
+  $("#inviteNew").innerHTML = "";
+  $("#inviteList").innerHTML = "";
+  $("#inviteStats").innerHTML = `<span class="cov-empty">邀请制状态加载中…</span>`;
   openModal("shareModal");
+  await loadInvites(false);
+}
+
+async function loadInvites(quiet = true) {
+  if (!shareState.token) return null;
+  try {
+    shareState.invites = await api(`/api/share/${shareState.token}/invite`);
+  } catch (err) {
+    shareState.invites = null;
+    if (!quiet) toast("邀请码信息加载失败：" + err.message, 3000);
+  }
+  renderInvites();
+  return shareState.invites;
+}
+
+function renderInvites() {
+  const inv = shareState.invites;
+  const stateEl = $("#inviteState"), statsEl = $("#inviteStats"),
+        listEl = $("#inviteList"), toggle = $("#inviteToggle");
+  if (!inv) { stateEl.innerHTML = ""; statsEl.innerHTML = ""; listEl.innerHTML = ""; return; }
+  stateEl.innerHTML = inv.invite_only
+    ? `<span class="badge ok">邀请制已开启</span>`
+    : `<span class="badge dirty">公开分享 · 未开启邀请制</span>`;
+  toggle.textContent = inv.invite_only ? "关闭邀请制" : "开启邀请制";
+  statsEl.innerHTML = `
+    <div class="cov-cards">
+      <div><b>${inv.total}</b><span>邀请码总数</span></div>
+      <div><b class="invite-used-num">${inv.used}</b><span>已用</span></div>
+      <div><b class="invite-unused-num">${inv.unused}</b><span>未用</span></div>
+    </div>`;
+  listEl.innerHTML = inv.codes.length
+    ? inv.codes.map((c) => `
+        <div class="invite-row ${c.used ? "used" : ""}">
+          <span class="invite-code">${esc(fmtCode(c.code))}</span>
+          <span class="invite-status">${c.used
+            ? `已使用${c.used_run_id ? ` · 会话 #${c.used_run_id}` : ""}${c.used_at ? ` · ${esc(c.used_at.replace("T", " ").slice(0, 19))}` : ""}`
+            : "未使用"}</span>
+        </div>`).join("")
+    : `<div class="invite-empty">尚未生成邀请码，可在上方输入数量后批量生成。</div>`;
+}
+
+async function toggleInvite() {
+  if (!shareState.token || !shareState.invites) return;
+  const next = !shareState.invites.invite_only;
+  try {
+    shareState.invites = await api(`/api/share/${shareState.token}/invite`, {
+      method: "PUT", body: { invite_only: next } });
+    renderInvites();
+    toast(next ? "已开启邀请制：新会话须凭邀请码开始" : "已关闭邀请制：恢复公开直接作答");
+  } catch (err) {
+    toast(err.message, 3000);
+  }
+}
+
+async function generateInvites() {
+  if (!shareState.token) return;
+  const count = Math.max(1, Math.min(500, Number($("#inviteCount").value) || 0));
+  $("#inviteCount").value = count;
+  const btn = $("#inviteGen");
+  btn.disabled = true;
+  try {
+    const r = await api(`/api/share/${shareState.token}/invite/codes`, {
+      method: "POST", body: { count } });
+    shareState.invites = r;
+    renderInvites();
+    const text = r.generated.map(fmtCode).join("\n");
+    $("#inviteNew").innerHTML = `
+      <div class="invite-new-box">
+        <div class="invite-new-head">✅ 新生成 ${r.generated.length} 个邀请码（仅本次集中展示，请复制后分发给受访者）</div>
+        <textarea id="inviteNewCodes" readonly rows="${Math.min(8, r.generated.length + 1)}">${esc(text)}</textarea>
+        <button id="inviteCopyNew">复制全部新邀请码</button>
+      </div>`;
+    $("#inviteCopyNew").onclick = () =>
+      copyText(text).then((ok) => toast(ok ? "新邀请码已全部复制" : "复制失败，请手动选择复制"));
+    toast(`已生成 ${r.generated.length} 个邀请码`);
+  } catch (err) {
+    toast("生成邀请码失败：" + err.message, 3000);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 let runId = null;

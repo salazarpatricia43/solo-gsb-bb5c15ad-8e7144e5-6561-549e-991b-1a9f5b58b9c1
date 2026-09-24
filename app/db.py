@@ -30,6 +30,7 @@ def init_db() -> None:
                 script_id  INTEGER,
                 script_name TEXT NOT NULL,
                 content    TEXT NOT NULL,
+                invite_only INTEGER NOT NULL DEFAULT 0,  -- 1 = 新会话须凭邀请码开始
                 created_at TEXT NOT NULL
             );
 
@@ -55,5 +56,30 @@ def init_db() -> None:
                 created_at  TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_resume_tokens_run ON resume_tokens(run_id);
+
+            -- One-time invite codes for invite-only share snapshots. Each code
+            -- belongs to exactly one share snapshot (share_token); used=1 flips
+            -- atomically with the creation of the answer session it opened.
+            CREATE TABLE IF NOT EXISTS invite_codes (
+                code        TEXT PRIMARY KEY,
+                share_token TEXT NOT NULL,
+                used        INTEGER NOT NULL DEFAULT 0,
+                used_run_id INTEGER,
+                created_at  TEXT NOT NULL,
+                used_at     TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_invite_codes_share ON invite_codes(share_token);
             """
         )
+        _migrate(db)
+
+
+def _migrate(db: sqlite3.Connection) -> None:
+    """Backfill columns introduced after the first release into existing DBs.
+
+    Runs inside init_db's transaction, so an old database file is upgraded
+    in place on startup — no manual migration step is ever required.
+    """
+    share_cols = {row["name"] for row in db.execute("PRAGMA table_info(shares)")}
+    if "invite_only" not in share_cols:
+        db.execute("ALTER TABLE shares ADD COLUMN invite_only INTEGER NOT NULL DEFAULT 0")

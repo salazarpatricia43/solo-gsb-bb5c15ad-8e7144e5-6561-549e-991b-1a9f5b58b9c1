@@ -437,3 +437,47 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   background: #fff; border: 1px solid #fecaca; color: #991b1b;
   border-radius: 10px; padding: 24px 20px; font-size: 14px;
 }
+
+/* ---------- invite-only sharing ---------- */
+.invite-box { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 14px; }
+.invite-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.invite-head h4 { margin: 0; font-size: 14px; }
+.invite-tip { margin: 0 0 10px; font-size: 12px; color: var(--muted); line-height: 1.7; }
+.invite-tip b { color: var(--text); }
+.invite-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.invite-gen { display: inline-flex; align-items: center; gap: 6px; }
+.invite-gen input {
+  width: 76px; font: inherit; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.invite-stats { margin-bottom: 10px; }
+.invite-stats .cov-cards b { color: var(--primary); }
+.invite-stats .invite-used-num { color: var(--coverage-miss); }
+.invite-stats .invite-unused-num { color: var(--start); }
+.invite-list {
+  max-height: 180px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 8px;
+}
+.invite-row {
+  display: flex; align-items: center; gap: 10px; padding: 6px 12px;
+  font-size: 12px; border-top: 1px solid #f3f4f6;
+}
+.invite-row:first-child { border-top: none; }
+.invite-row.used { background: #fafbfc; color: var(--muted); }
+.invite-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600; letter-spacing: 1px;
+}
+.invite-row.used .invite-code { text-decoration: line-through; font-weight: 400; }
+.invite-status { margin-left: auto; color: var(--muted); white-space: nowrap; }
+.invite-empty { padding: 12px; font-size: 12px; color: var(--muted); }
+.invite-new-box {
+  margin-bottom: 10px; border: 1px solid #bbf7d0; background: #f0fdf4;
+  border-radius: 8px; padding: 10px 12px;
+}
+.invite-new-head { font-size: 12px; color: #166534; margin-bottom: 8px; line-height: 1.6; }
+.invite-new-box textarea {
+  width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px; background: #fff; resize: vertical; margin-bottom: 8px;
+}

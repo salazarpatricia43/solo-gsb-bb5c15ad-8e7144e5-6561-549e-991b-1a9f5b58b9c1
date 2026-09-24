@@ -1,6 +1,8 @@
 """FastAPI application: script CRUD, validation, sharing, runtime preview runs."""
 import json
+import re
 import secrets
+import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
@@ -61,6 +63,7 @@ class ScriptUpdate(BaseModel):
 class RunStart(BaseModel):
     script_id: int | None = None
     share_token: str | None = None
+    invite_code: str | None = None
 
 
 class RunChoice(BaseModel):
@@ -69,6 +72,14 @@ class RunChoice(BaseModel):
 
 class ShareResume(BaseModel):
     resume_token: str
+
+
+class InviteToggle(BaseModel):
+    invite_only: bool
+
+
+class InviteBatch(BaseModel):
+    count: int = Field(ge=1, le=500)
 
 
 class RouteOptionRef(BaseModel):
@@ -425,7 +436,117 @@ def get_share(token: str):
         raise HTTPException(404, "分享链接不存在或已失效")
     return {"token": row["token"], "name": row["script_name"],
             "content": json.loads(row["content"]), "created_at": row["created_at"],
-            "read_only": True}
+            "invite_only": bool(row["invite_only"]), "read_only": True}
+
+
+# ---- invite-only sharing ---------------------------------------------------
+# An invite code belongs to exactly ONE share snapshot. When a snapshot has
+# invite_only=1, starting a new answer session requires an unused code of that
+# snapshot: verification, consumption and session creation happen inside one
+# SQLite write transaction, so cross-snapshot, repeated or concurrent use is
+# rejected without creating a session. Resuming a paused session still uses
+# the one-time resume token only and never touches invite codes.
+
+_INVITE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no 0/O/1/I/L lookalikes
+
+
+def _new_invite_code() -> str:
+    return "".join(secrets.choice(_INVITE_ALPHABET) for _ in range(8))
+
+
+def _normalize_invite(code: str | None) -> str:
+    """Canonical form: uppercase alphanumerics only (dashes/spaces ignored)."""
+    return re.sub(r"[^0-9A-Za-z]", "", code or "").upper()
+
+
+def _invite_state(db, token: str) -> dict[str, Any]:
+    """Invite-only flag + used/unused counts + full code list of a snapshot."""
+    share = db.execute("SELECT invite_only FROM shares WHERE token = ?", (token,)).fetchone()
+    if share is None:
+        raise HTTPException(404, "分享链接不存在或已失效")
+    rows = db.execute(
+        "SELECT code, used, used_run_id, created_at, used_at FROM invite_codes "
+        "WHERE share_token = ? ORDER BY created_at DESC, code DESC",
+        (token,),
+    ).fetchall()
+    used = sum(1 for r in rows if r["used"])
+    return {
+        "token": token,
+        "invite_only": bool(share["invite_only"]),
+        "total": len(rows),
+        "used": used,
+        "unused": len(rows) - used,
+        "codes": [{"code": r["code"], "used": bool(r["used"]),
+                   "used_run_id": r["used_run_id"],
+                   "created_at": r["created_at"], "used_at": r["used_at"]}
+                  for r in rows],
+    }
+
+
+@app.get("/api/share/{token}/invite")
+def get_invites(token: str):
+    with get_db() as db:
+        return _invite_state(db, token)
+
+
+@app.put("/api/share/{token}/invite")
+def toggle_invite(token: str, payload: InviteToggle):
+    with get_db() as db:
+        share = db.execute("SELECT 1 FROM shares WHERE token = ?", (token,)).fetchone()
+        if share is None:
+            raise HTTPException(404, "分享链接不存在或已失效")
+        db.execute("UPDATE shares SET invite_only = ? WHERE token = ?",
+                   (int(payload.invite_only), token))
+        return _invite_state(db, token)
+
+
+@app.post("/api/share/{token}/invite/codes", status_code=201)
+def generate_invites(token: str, payload: InviteBatch):
+    """Batch-generate random one-time invite codes bound to this snapshot."""
+    ts = now_iso()
+    with get_db() as db:
+        share = db.execute("SELECT 1 FROM shares WHERE token = ?", (token,)).fetchone()
+        if share is None:
+            raise HTTPException(404, "分享链接不存在或已失效")
+        generated: list[str] = []
+        while len(generated) < payload.count:
+            code = _new_invite_code()
+            try:
+                db.execute(
+                    "INSERT INTO invite_codes (code, share_token, used, created_at) "
+                    "VALUES (?, ?, 0, ?)",
+                    (code, token, ts),
+                )
+                generated.append(code)
+            except sqlite3.IntegrityError:
+                continue  # primary-key collision: retry with a fresh random code
+        return {**_invite_state(db, token), "generated": generated}
+
+
+def _claim_invite(db, share_token: str, code: str) -> None:
+    """Atomically consume one invite code for this snapshot (single-use claim).
+
+    The conditional UPDATE is the first write of the surrounding transaction:
+    it only succeeds while the row is still unused AND bound to this very
+    snapshot, so a repeated or concurrent claim affects 0 rows. The caller
+    raises on failure, rolling the whole transaction back — no session row is
+    ever created for a rejected code.
+    """
+    claimed = db.execute(
+        "UPDATE invite_codes SET used = 1, used_at = ? "
+        "WHERE code = ? AND share_token = ? AND used = 0",
+        (now_iso(), code, share_token),
+    ).rowcount
+    if claimed:
+        return
+    row = db.execute("SELECT share_token, used FROM invite_codes WHERE code = ?",
+                     (code,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "邀请码不存在，请检查后重新输入")
+    if row["share_token"] != share_token:
+        # A code may only ever open the snapshot it was issued for.
+        raise HTTPException(403, "邀请码不属于当前分享链接，无法在此使用")
+    raise HTTPException(400, "邀请码已被使用，每个邀请码只能开启一次新会话")
 
 
 @app.post("/api/share/{token}/resume")
@@ -491,8 +612,31 @@ def _run_content(db, row) -> dict[str, Any]:
 def start_run(payload: RunStart):
     if not payload.script_id and not payload.share_token:
         raise HTTPException(400, "需要 script_id 或 share_token")
+    invite_code = _normalize_invite(payload.invite_code)
     with get_db() as db:
-        content = _run_content_for(db, payload)
+        claimed_code = None
+        if payload.share_token:
+            share = db.execute(
+                "SELECT content, invite_only FROM shares WHERE token = ?",
+                (payload.share_token,),
+            ).fetchone()
+            if share is None:
+                raise HTTPException(404, "分享不存在")
+            if share["invite_only"]:
+                # Invite-only snapshot: verify + consume the code and create the
+                # session in ONE write transaction. Any failure raises and rolls
+                # everything back, so a rejected code never leaves a session row.
+                if not invite_code:
+                    raise HTTPException(400, "该分享已开启邀请制，请输入邀请码后开始新会话")
+                _claim_invite(db, payload.share_token, invite_code)
+                claimed_code = invite_code
+            content = json.loads(share["content"])
+        else:
+            row = db.execute("SELECT content FROM scripts WHERE id = ?",
+                             (payload.script_id,)).fetchone()
+            if row is None:
+                raise HTTPException(404, "脚本不存在")
+            content = json.loads(row["content"])
         try:
             result = graph_step(content, "", None)
         except ValueError as exc:
@@ -509,21 +653,11 @@ def start_run(payload: RunStart):
              int(finished), now_iso()),
         )
         run_id = cur.lastrowid
+        if claimed_code is not None:
+            # Same transaction: link the freshly created session to the code.
+            db.execute("UPDATE invite_codes SET used_run_id = ? WHERE code = ?",
+                       (run_id, claimed_code))
     return {"run_id": run_id, "current_node": node, "steps": steps, "finished": finished}
-
-
-def _run_content_for(db, payload: RunStart) -> dict[str, Any]:
-    if payload.share_token:
-        row = db.execute("SELECT content FROM shares WHERE token = ?",
-                         (payload.share_token,)).fetchone()
-        if row is None:
-            raise HTTPException(404, "分享不存在")
-        return json.loads(row["content"])
-    row = db.execute("SELECT content FROM scripts WHERE id = ?",
-                     (payload.script_id,)).fetchone()
-    if row is None:
-        raise HTTPException(404, "脚本不存在")
-    return json.loads(row["content"])
 
 
 def _load_run(db, run_id: int):
